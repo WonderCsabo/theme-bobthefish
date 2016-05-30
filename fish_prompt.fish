@@ -48,13 +48,79 @@
 #     and command hg stat > /dev/null ^&1
 # end
 
-function __bobthefish_git_branch -S -d 'Get the current git branch (or commitish)'
-  set -l ref (command git symbolic-ref HEAD ^/dev/null)
-  if [ $status -gt 0 ]
-    set -l branch (command git show-ref --head -s --abbrev | head -n1 ^/dev/null)
-    set ref "$__bobthefish_detached_glyph $branch"
+function __bobthefish_git_branch -S -a git_dir -d 'Get the current git branch or tag (or commitish)'
+  set -l branch
+  set -l operation
+  set -l detached no
+  set -l bare
+  set -l step
+  set -l total
+  set -l os
+  set -l sha (command git rev-parse HEAD ^/dev/null)
+
+  if test -d $git_dir/rebase-merge
+
+      set branch (cat $git_dir/rebase-merge/head-name ^/dev/null)
+      if test -f $git_dir/rebase-merge/interactive
+          set operation "|REBASE-i"
+      else
+          set operation "|REBASE-m"
+      end
+  else
+      if test -d $git_dir/rebase-apply
+          set step (cat $git_dir/rebase-apply/next ^/dev/null)
+          set total (cat $git_dir/rebase-apply/last ^/dev/null)
+          if test -f $git_dir/rebase-apply/rebasing
+              set branch (cat $git_dir/rebase-apply/head-name ^/dev/null)
+              set operation "|REBASE"
+          else if test -f $git_dir/rebase-apply/applying
+              set operation "|AM"
+          else
+              set operation "|AM/REBASE"
+          end
+      else if test -f $git_dir/MERGE_HEAD
+          set operation "|MERGING"
+      else if test -f $git_dir/CHERRY_PICK_HEAD
+          set operation "|CHERRY-PICKING"
+      else if test -f $git_dir/REVERT_HEAD
+          set operation "|REVERTING"
+      else if test -f $git_dir/BISECT_LOG
+          set operation "|BISECTING"
+      end
   end
-  echo $ref | sed "s#refs/heads/#$__bobthefish_branch_glyph #"
+
+  if test -n "$step" -a -n "$total"
+      set operation "$operation $step/$total"
+  end
+
+  if test -z "$branch"
+      set branch (command git symbolic-ref HEAD ^/dev/null; set os $status)
+      if test $os -ne 0
+          set detached yes
+          set branch (command git describe --tags --exact-match HEAD ^/dev/null; set os $status)
+
+          if test $os -ne 0
+              # Shorten the sha ourselves to 8 characters - this should be good for most repositories,
+              # and even for large ones it should be good for most commits
+
+              echo -n "$__bobthefish_detached_glyph "
+
+              if set -q sha
+                  set branch (string match -r '^.{8}' -- $sha)
+              else
+                  set branch unknown
+              end
+          end
+          set branch "$branch"
+      else
+        echo -n "$__bobthefish_branch_glyph "
+      end
+    end
+
+  set branch (echo $branch | sed "s#refs/heads/##")
+
+  echo -n $branch
+  echo -n $operation
 end
 
 function __bobthefish_hg_branch -S -d 'Get the current hg branch'
@@ -65,6 +131,10 @@ end
 
 function __bobthefish_pretty_parent -S -a current_dir -d 'Print a parent directory, shortened to fit the prompt'
   echo -n (dirname $current_dir) | sed -e 's#/private##' -e "s#^$HOME#~#" -e 's#/\(\.\{0,1\}[^/]\)\([^/]*\)#/\1#g' -e 's#/$##'
+end
+
+function __bobthefish_pretty_current -S -a current_dir -d 'Print a parent directory, shortened to fit the prompt'
+  echo -n $current_dir | sed -e 's#/private##' -e "s#^$HOME#~#" -e 's#/\(\.\{0,1\}[^/]\)\([^/]*\)#/\1#g' -e 's#/$##'
 end
 
 function __bobthefish_git_project_dir -S -d 'Print the current git project base directory'
@@ -416,7 +486,11 @@ function __bobthefish_prompt_git -S -a current_dir -d 'Display the actual git st
   __bobthefish_path_segment $current_dir
 
   __bobthefish_start_segment $flag_bg $flag_fg --bold
-  echo -ns (__bobthefish_git_branch) $flags ' '
+
+  set -l repo_dir (git rev-parse --show-toplevel)
+  set -l git_dir (git rev-parse --git-dir)
+
+  echo -ns (__bobthefish_git_branch $git_dir) $flags ' '
   set_color normal
 
   if [ "$theme_git_worktree_support" != 'yes' ]
@@ -428,7 +502,16 @@ function __bobthefish_prompt_git -S -a current_dir -d 'Display the actual git st
         __bobthefish_start_segment $__bobthefish_med_red $__bobthefish_lt_red
       end
 
-      echo -ns $project_pwd ' '
+      set -l abbrev_all (__bobthefish_pretty_current $PWD)
+      set -l abbrev_git (__bobthefish_pretty_current $repo_dir)
+      set -l only_git (echo -n $abbrev_all | sed -e "s#^$abbrev_git##")
+
+      if [ (dirname $only_git) != "/" ]
+        echo -n (dirname $only_git)"/"
+      end
+
+      echo -n (basename $PWD)
+
     end
     return
   end
